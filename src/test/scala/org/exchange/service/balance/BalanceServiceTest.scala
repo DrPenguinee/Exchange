@@ -18,26 +18,34 @@ object BalanceServiceTest extends ZIOSpecDefault {
           error <- balanceService.getClientBalance(nonExistentClient).flip
         } yield assertTrue(error == ClientNotFound(nonExistentClient))
       },
-      test("return client's balance") {
+      test("add client (with default empty balance)") {
         val client = Client("client")
-        val balance = Balance.empty
         for {
           balanceService <- ZIO.service[BalanceService]
-          _ <- balanceService.changeClientBalance(client, balance)
+          _ <- balanceService.addClient(client)
+          res <- balanceService.getClientBalance(client)
+        } yield assertTrue(res == Balance.empty)
+      },
+      test("add client (with start balance)") {
+        val client = Client("client")
+        val balance = Balance(money = 5, Map(Security.B -> 42))
+        for {
+          balanceService <- ZIO.service[BalanceService]
+          _ <- balanceService.addClient(client, balance)
           res <- balanceService.getClientBalance(client)
         } yield assertTrue(res == balance)
       },
-      test("return changed client's balance") {
+      test("change client's balance") {
         val client = Client("client")
-        val balance1 = Balance.empty
-        val balance2 = Balance(100, Map(Security.A -> 5))
+        val balanceChange = (balance: Balance) =>
+          balance.copy(money = balance.money + 100, securities = balance.securities.updated(Security.A, 5))
         for {
           balanceService <- ZIO.service[BalanceService]
-          _ <- balanceService.changeClientBalance(client, balance1)
+          _ <- balanceService.addClient(client)
           res1 <- balanceService.getClientBalance(client)
-          _ <- balanceService.changeClientBalance(client, balance2)
+          _ <- balanceService.changeClientBalance(client, balanceChange)
           res2 <- balanceService.getClientBalance(client)
-        } yield assertTrue(res1 == balance1, res2 == balance2)
+        } yield assertTrue(res1 == Balance.empty, res2 == balanceChange(Balance.empty))
       },
     ).provideLayer(BalanceServiceImpl.live)
 }

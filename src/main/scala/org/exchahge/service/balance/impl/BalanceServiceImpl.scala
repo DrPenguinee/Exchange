@@ -14,11 +14,14 @@ private[balance] class BalanceServiceImpl(
 
   override def getAllBalances: UIO[Map[Client, Balance]] = balanceByClient.get
 
-  override def changeClientBalance(
-      client: Client,
-      updatedBalance: Balance,
-  ): UIO[Unit] =
-    balanceByClient.update(_ + (client -> updatedBalance))
+  override def addClient(client: Client): UIO[Unit] =
+    addClient(client, Balance.empty)
+
+  override def addClient(client: Client, balance: Balance): UIO[Unit] =
+    balanceByClient.update(x => if (x.contains(client)) x else x.updated(client, balance))
+
+  override def changeClientBalance(client: Client, update: Balance => Balance): UIO[Unit] =
+    balanceByClient.update(_.updatedWith(client)(_.map(update)))
 }
 
 object BalanceServiceImpl {
