@@ -3,12 +3,11 @@ package org.exchahge.service.exchange.impl
 import monocle.Lens
 import org.exchahge.ListOps.*
 import org.exchahge.model.Order.{BuyOrder, SellOrder}
-import org.exchahge.model.{Order, Security}
+import org.exchahge.model.{Balance, Order, Security}
 import org.exchahge.service.balance.BalanceService
-import org.exchahge.service.balance.error.ClientNotFound
 import org.exchahge.service.exchange.Exchange
 import org.exchahge.service.exchange.impl.ExchangeImpl.OrderBook
-import zio.{IO, Ref, Task, UIO, URLayer, ZIO, ZLayer}
+import zio.{Ref, Task, UIO, URLayer, ZIO, ZLayer}
 
 private class ExchangeImpl(
     balanceService: BalanceService,
@@ -19,49 +18,37 @@ private class ExchangeImpl(
     ordersRef.get.map(_.apply(order.security)).flatMap { orderBook =>
       order match {
         case buyOrder: BuyOrder =>
-          val maybeComplementOrder: Option[SellOrder] =
-            orderBook.sells.find(o => o.price == order.price && o.quantity == order.quantity)
-          maybeComplementOrder match {
-            case Some(complementOrder) if buyOrder.client != complementOrder.client =>
-              executeOrders(buyOrder, complementOrder) *>
-                ordersRef.update(
-                  _.updatedWith(order.security)(
-                    _.map(book => book.copy(sells = book.sells.removeElement(complementOrder))),
-                  ),
-                )
-            case _ =>
-              ordersRef.update(_.updatedWith(order.security)(_.map(book => book.copy(buys = book.buys :+ buyOrder))))
+          updateOrderBook(buyOrder, orderBook, OrderBook.buys, OrderBook.sells).flatMap {
+            case Some(buyOrder, sellOrder) => executeOrders(buyOrder, sellOrder)
+            case None                      => ZIO.unit
           }
 
         case sellOrder: SellOrder =>
-          val maybeComplementOrder: Option[BuyOrder] =
-            orderBook.buys.find(o => o.price == order.price && o.quantity == order.quantity)
-          maybeComplementOrder match {
-            case Some(complementOrder) if sellOrder.client != complementOrder.client =>
-              executeOrders(complementOrder, sellOrder).as(
-                ordersRef.update(
-                  _.updatedWith(order.security)(
-                    _.map(book => book.copy(buys = book.buys.removeElement(complementOrder))),
-                  ),
-                ),
-              )
-            case _ =>
-              ordersRef.update(_.updatedWith(order.security)(_.map(book => book.copy(sells = book.sells :+ sellOrder))))
+          updateOrderBook(sellOrder, orderBook, OrderBook.sells, OrderBook.buys).flatMap {
+            case Some(sellOrder, buyOrder) => executeOrders(buyOrder, sellOrder)
+            case None                      => ZIO.unit
           }
       }
     }
   }
 
-  private def updateOrderBook[A <: Order, B <: Order](order: A, orderBook: OrderBook, lensA: Lens[OrderBook, List[A]], lensB: Lens[OrderBook, List[B]]): UIO[Option[(A, B)]] = {
+  private def updateOrderBook[A <: Order, B <: Order](
+      order: A,
+      orderBook: OrderBook,
+      lensA: Lens[OrderBook, List[A]],
+      lensB: Lens[OrderBook, List[B]],
+  ): UIO[Option[(A, B)]] = {
     val maybeComplementOrder: Option[B] =
       lensB.get(orderBook).find(o => o.price == order.price && o.quantity == order.quantity)
     maybeComplementOrder match {
       case Some(complementOrder) if order.client != complementOrder.client =>
-          ordersRef.update(
+        ordersRef
+          .update(
             _.updatedWith(order.security)(
               _.map(lensB.modify(_.removeElement(complementOrder))),
             ),
-          ).as(Some(order, complementOrder))
+          )
+          .as(Some(order, complementOrder))
       case _ =>
         ordersRef.update(_.updatedWith(order.security)(_.map(lensA.modify(_ :+ order)))).as(None)
     }
@@ -70,31 +57,40 @@ private class ExchangeImpl(
   private def executeOrders(
       buyOrder: BuyOrder,
       sellOrder: SellOrder,
-  ): IO[ClientNotFound, Unit] =
-    for {
-      balances <- balanceService
-        .getClientBalance(buyOrder.client)
-        .zipPar(balanceService.getClientBalance(sellOrder.client))
+  ): Task[Unit] =
+    ZIO
+      .fail(new IllegalArgumentException(s"$buyOrder doesn't correspond to $sellOrder"))
+      .when(
+        buyOrder.security != sellOrder.security || buyOrder.price != sellOrder.price || buyOrder.quantity != sellOrder.quantity,
+      ) *> {
 
-      (buyerBalance, sellerBalance) = balances
+      val security = buyOrder.security
+      val money    = buyOrder.price * buyOrder.quantity
+      val quantity = buyOrder.quantity
 
-      updatedBuyerBalance = buyerBalance.copy(
-        money = buyerBalance.money - buyOrder.price * buyOrder.quantity,
-        securities = buyerBalance.securities.updatedWith(buyOrder.security)(
-          _.map(_ + buyOrder.quantity),
-        ),
-      )
+      val updateBuyerBalance = (buyerBalance: Balance) =>
+        buyerBalance.copy(
+          money = buyerBalance.money - money,
+          securities = buyerBalance.securities.updatedWith(security) {
+            case Some(securityQuantity) => Some(securityQuantity + quantity)
+            case None                   => Some(quantity)
+          },
+        )
 
-      updatedSellerBalance = sellerBalance.copy(
-        money = sellerBalance.money + sellOrder.price * sellOrder.quantity,
-        securities = sellerBalance.securities.updatedWith(sellOrder.security)(
-          _.map(_ - sellOrder.quantity),
-        ),
-      )
+      val updateSellerBalance = (sellerBalance: Balance) =>
+        sellerBalance.copy(
+          money = sellerBalance.money + money,
+          securities = sellerBalance.securities.updatedWith(security) {
+            case Some(securityQuantity) => Some(securityQuantity - quantity)
+            case None                   => Some(-quantity)
+          },
+        )
 
-      _ <- balanceService.changeClientBalance(buyOrder.client, updatedBuyerBalance)
-      _ <- balanceService.changeClientBalance(sellOrder.client, updatedSellerBalance)
-    } yield ()
+      for {
+        _ <- balanceService.changeClientBalance(buyOrder.client, updateBuyerBalance)
+        _ <- balanceService.changeClientBalance(sellOrder.client, updateSellerBalance)
+      } yield ()
+    }
 }
 
 object ExchangeImpl {
@@ -115,7 +111,7 @@ object ExchangeImpl {
   val live: URLayer[BalanceService, Exchange] = ZLayer {
     for {
       balanceService <- ZIO.service[BalanceService]
-      ordersRef <- Ref.make(Map.from(Security.values.map(_ -> OrderBook.empty)))
+      ordersRef      <- Ref.make(Map.from(Security.values.map(_ -> OrderBook.empty)))
     } yield ExchangeImpl(balanceService, ordersRef)
   }
 }
