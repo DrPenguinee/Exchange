@@ -1,7 +1,12 @@
 package org.exchahge.model
 
-case class Balance(money: Int, securities: Map[Security, Int])
+import org.exchahge.model.Security.*
+
+case class Balance(money: MoneyAmount, securities: Map[Security, Quantity]) {
+  def view: String =
+    s"$money\t${securities.getOrElse(A, 0)}\t${securities.getOrElse(B, 0)}\t${securities.getOrElse(C, 0)}\t${securities.getOrElse(D, 0)}"
+}
 
 object Balance {
-  def empty: Balance = Balance(0, Map.empty)
+  def empty: Balance = Balance(MoneyAmount.zero, Map.empty)
 }

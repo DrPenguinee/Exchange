@@ -6,16 +6,16 @@ sealed trait Order {
   def client: Client
   def side: Side
   def security: Security
-  def price: Int
-  def quantity: Int
+  def price: MoneyAmount
+  def quantity: Quantity
 }
 
 object Order {
   case class BuyOrder(
       client: Client,
       security: Security,
-      price: Int,
-      quantity: Int,
+      price: MoneyAmount,
+      quantity: Quantity,
   ) extends Order {
     val side: Side.Buy.type = Side.Buy
   }
@@ -23,8 +23,8 @@ object Order {
   case class SellOrder(
       client: Client,
       security: Security,
-      price: Int,
-      quantity: Int,
+      price: MoneyAmount,
+      quantity: Quantity,
   ) extends Order {
     val side: Side.Sell.type = Side.Sell
   }

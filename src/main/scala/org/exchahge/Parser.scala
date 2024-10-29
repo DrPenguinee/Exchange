@@ -12,8 +12,8 @@ object Parser {
     line match {
       case orderPattern(clientName, rawSide, sec, price, quantity) =>
         for {
-          security <- Validation.fromOptionWith(s"Wrong security name $sec")(Security.fromValue(sec))
-          priceInt <- Validation.fromOptionWith("Price field is not int")(price.toIntOption)
+          security    <- Validation.fromOptionWith(s"Wrong security name $sec")(Security.fromValue(sec))
+          priceInt    <- Validation.fromOptionWith("Price field is not int")(price.toIntOption)
           quantityInt <- Validation.fromOptionWith("Quantity field is not int")(quantity.toIntOption)
           order <- rawSide match
             case "b" =>
@@ -21,8 +21,8 @@ object Parser {
                 BuyOrder(
                   Client(clientName),
                   security,
-                  priceInt,
-                  quantityInt,
+                  MoneyAmount(priceInt),
+                  Quantity(quantityInt),
                 ),
               )
             case "s" =>
@@ -30,8 +30,8 @@ object Parser {
                 SellOrder(
                   Client(clientName),
                   security,
-                  priceInt,
-                  quantityInt,
+                  MoneyAmount(priceInt),
+                  Quantity(quantityInt),
                 ),
               )
             case _ => Validation.fail(s"Order side '$rawSide' has wrong format (should be 's' or 'b')")
@@ -55,8 +55,13 @@ object Parser {
         } yield (
           Client(clientName),
           Balance(
-            moneyAmountInt,
-            Map(Security.A -> secAInt, Security.B -> secBInt, Security.C -> secCInt, Security.D -> secDInt),
+            MoneyAmount(moneyAmountInt),
+            Map(
+              Security.A -> Quantity(secAInt),
+              Security.B -> Quantity(secBInt),
+              Security.C -> Quantity(secCInt),
+              Security.D -> Quantity(secDInt),
+            ),
           ),
         )
       case _ => Validation.fail(s"Line '$line' doesn't correspond client format")
