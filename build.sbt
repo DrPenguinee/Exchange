@@ -14,6 +14,7 @@ lazy val root = (project in file("."))
       "dev.zio" %% "zio-test" % zioVersion % Test,
       "dev.zio" %% "zio-test-sbt" % zioVersion % Test,
       "dev.zio" %% "zio-test-magnolia" % zioVersion % Test,
+      "dev.zio" %% "zio-mock" % "1.0.0-RC12",
       "dev.optics" %% "monocle-core"  % monocleVersion,
     ),
   )
